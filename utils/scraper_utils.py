@@ -12,6 +12,8 @@ from crawl4ai import (
 
 from models.venue import Venue
 from utils.data_utils import is_complete_venue, is_duplicate_venue
+from bs4 import BeautifulSoup
+from urllib.parse import urljoin, urlparse
 
 
 def get_browser_config() -> BrowserConfig:
@@ -93,7 +95,7 @@ async def check_no_results(
 
 async def fetch_and_process_page(
     crawler: AsyncWebCrawler,
-    base_url: str,
+    page_url: str,
     css_selector: str,
     llm_strategy: LLMExtractionStrategy,
     session_id: str,
@@ -102,29 +104,69 @@ async def fetch_and_process_page(
 ) -> Tuple[List[dict], bool]:
     """
     Fetches and processes venue data from a single URL.
-
-    Args:
-        crawler (AsyncWebCrawler): The web crawler instance.
-        base_url (str): The URL to scrape.
-        css_selector (str): The CSS selector to target the content.
-        llm_strategy (LLMExtractionStrategy): The LLM extraction strategy.
-        session_id (str): The session identifier.
-        required_keys (List[str]): List of required keys in the venue data.
-        seen_names (Set[str]): Set of venue names that have already been seen.
-
-    Returns:
-        Tuple[List[dict], bool]: A tuple containing a list of processed venues and a boolean indicating whether "No Results Found" was encountered.
     """
-    print(f"Loading URL: {base_url}")
+    print(f"Loading URL: {page_url}")
 
-    # Fetch page content with the extraction strategy
-    result = await crawler.arun(
-        url=base_url,
+    # First, fetch the page to get base URL
+    initial_result = await crawler.arun(
+        url=page_url,
         config=CrawlerRunConfig(
-            cache_mode=CacheMode.BYPASS,  # Do not use cached data
-            extraction_strategy=llm_strategy,  # Strategy for data extraction
-            css_selector=css_selector,  # Target specific content on the page
-            session_id=session_id,  # Unique session ID for the crawl
+            cache_mode=CacheMode.BYPASS,
+            session_id=session_id,
+        ),
+    )
+
+    if not initial_result.success:
+        print(f"Error fetching initial page: {initial_result.error_message}")
+        return [], False
+
+    # Parse the HTML to find the base URL
+    soup = BeautifulSoup(initial_result.cleaned_html, 'html.parser')
+    base_tag = soup.find('base')
+    
+    # Get base URL from base tag or page URL
+    if base_tag and base_tag.get('href'):
+        base_url = base_tag['href']
+    else:
+        parsed_url = urlparse(page_url)
+        base_url = f"{parsed_url.scheme}://{parsed_url.netloc}"
+
+    print(f"Detected base URL: {base_url}")
+
+    # Update LLM strategy with URL handling instructions
+    llm_strategy.instruction = f"""
+        Extract all venue objects with 'document_name' and 'document_url' of the ISO 9001 documents from the 
+        following content. Only retrieve the links relevant to germany location and take care that you take 
+        the PDF links which are working for download.
+
+        IMPORTANT URL HANDLING INSTRUCTIONS:
+        1. For any PDF link you find, check if it's relative or absolute
+        2. If the link is relative (starts with '/' or doesn't start with 'http'):
+           - For links starting with '/': combine '{base_url}' with the link
+           - For links without leading '/': combine '{base_url}/' with the link
+        3. If the link is absolute (starts with 'http'): use it as is
+        4. Make sure all document_url values are complete, valid URLs
+
+        Example URL conversions:
+        - '/docs/cert.pdf' → '{base_url}/docs/cert.pdf'
+        - 'docs/cert.pdf' → '{base_url}/docs/cert.pdf'
+        - 'https://example.com/cert.pdf' → unchanged
+
+        Return the data in the following format:
+        {{
+            "document_name": "Name of the document",
+            "document_url": "Complete URL to the PDF"
+        }}
+    """
+
+    # Use the updated LLM strategy to extract content
+    result = await crawler.arun(
+        url=page_url,
+        config=CrawlerRunConfig(
+            cache_mode=CacheMode.BYPASS,
+            extraction_strategy=llm_strategy,
+            css_selector=css_selector,
+            session_id=session_id,
         ),
     )
 
@@ -141,33 +183,22 @@ async def fetch_and_process_page(
     # After parsing extracted content
     print("Extracted data:", extracted_data)
 
-    # Process venues
+    # Process venues and ensure URLs are properly formed
     complete_venues = []
     for venue in extracted_data:
-        # Debugging: Print each venue to understand its structure
-        print("Processing venue:", venue)
-
-        # Ignore the 'error' key if it's False
-        if venue.get("error") is False:
-            venue.pop("error", None)  # Remove the 'error' key if it's False
+        # Ensure URL is properly formed
+        if 'document_url' in venue:
+            venue['document_url'] = urljoin(base_url, venue['document_url'])
 
         if not is_complete_venue(venue, required_keys):
-            continue  # Skip incomplete venues
+            continue
 
         if is_duplicate_venue(venue["document_name"], seen_names):
             print(f"Duplicate venue '{venue['document_name']}' found. Skipping.")
-            continue  # Skip duplicate venues
+            continue
 
-        # Add venue to the list
         seen_names.add(venue["document_name"])
         complete_venues.append(venue)
 
-    if not complete_venues:
-        print("No complete venues found.")
-        return [], False
-
-    # Check for "No Results Found" message
-    no_results_found = await check_no_results(crawler, base_url, session_id)
-    
     print(f"Extracted {len(complete_venues)} venues.")
-    return complete_venues, no_results_found
+    return complete_venues, False

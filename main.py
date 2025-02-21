@@ -3,7 +3,7 @@ import asyncio
 from crawl4ai import AsyncWebCrawler
 from dotenv import load_dotenv
 
-from config import BASE_URL, CSS_SELECTOR, REQUIRED_KEYS
+from config import CRAWL_URL, CSS_SELECTOR, REQUIRED_KEYS
 from utils.data_utils import (
     save_venues_to_csv,
 )
@@ -37,7 +37,7 @@ async def crawl_venues():
             # Fetch and process data from the current page
             venues, no_results_found = await fetch_and_process_page(
                 crawler,
-                BASE_URL,
+                CRAWL_URL,
                 CSS_SELECTOR,
                 llm_strategy,
                 session_id,
