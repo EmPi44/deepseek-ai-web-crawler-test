@@ -8,3 +8,4 @@ class Venue(BaseModel):
 
     document_name: str
     document_url: str
+    error: bool = False
