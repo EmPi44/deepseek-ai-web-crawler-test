@@ -43,8 +43,12 @@ def get_llm_strategy() -> LLMExtractionStrategy:
         schema=Venue.model_json_schema(),  # JSON schema of the data model
         extraction_type="schema",  # Type of extraction to perform
         instruction=(
-            """Extract all venue objects with 'document_name' and 'document_url' of the ISO 9001 documents from the 
-            following content. Only retrieve the links relevant to germany location and take care that you take the PDF links which are working for download."""
+            """
+            Extract all venue objects with 'document_name' and 'document_url' of the ISO 9001 documents from the 
+            following content. 
+            Only retrieve the links relevant to germany location and take care that you take the PDF links which are working for download. 
+            Means check on the content what the base-url is and add the relative path to the base-url.
+            """
         ),  # Instructions for the LLM
         input_format="markdown",  # Format of the input content
         verbose=True,  # Enable verbose logging
