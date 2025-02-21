@@ -43,9 +43,8 @@ def get_llm_strategy() -> LLMExtractionStrategy:
         schema=Venue.model_json_schema(),  # JSON schema of the data model
         extraction_type="schema",  # Type of extraction to perform
         instruction=(
-            "Extract all venue objects with 'name', 'location', 'price', 'capacity', "
-            "'rating', 'reviews', and a 1 sentence description of the venue from the "
-            "following content."
+            """Extract all venue objects with 'document_name' and 'document_url' of the ISO 9001 documents from the 
+            following content. Only retrieve the links relevant to germany location and take care that you take the PDF links which are working for download."""
         ),  # Instructions for the LLM
         input_format="markdown",  # Format of the input content
         verbose=True,  # Enable verbose logging
@@ -90,21 +89,19 @@ async def check_no_results(
 
 async def fetch_and_process_page(
     crawler: AsyncWebCrawler,
-    page_number: int,
     base_url: str,
     css_selector: str,
     llm_strategy: LLMExtractionStrategy,
     session_id: str,
     required_keys: List[str],
     seen_names: Set[str],
-) -> Tuple[List[dict], bool]:
+) -> List[dict]:
     """
-    Fetches and processes a single page of venue data.
+    Fetches and processes venue data from a single URL.
 
     Args:
         crawler (AsyncWebCrawler): The web crawler instance.
-        page_number (int): The page number to fetch.
-        base_url (str): The base URL of the website.
+        base_url (str): The URL to scrape.
         css_selector (str): The CSS selector to target the content.
         llm_strategy (LLMExtractionStrategy): The LLM extraction strategy.
         session_id (str): The session identifier.
@@ -112,21 +109,13 @@ async def fetch_and_process_page(
         seen_names (Set[str]): Set of venue names that have already been seen.
 
     Returns:
-        Tuple[List[dict], bool]:
-            - List[dict]: A list of processed venues from the page.
-            - bool: A flag indicating if the "No Results Found" message was encountered.
+        List[dict]: A list of processed venues from the URL.
     """
-    url = f"{base_url}?page={page_number}"
-    print(f"Loading page {page_number}...")
-
-    # Check if "No Results Found" message is present
-    no_results = await check_no_results(crawler, url, session_id)
-    if no_results:
-        return [], True  # No more results, signal to stop crawling
+    print(f"Loading URL: {base_url}")
 
     # Fetch page content with the extraction strategy
     result = await crawler.arun(
-        url=url,
+        url=base_url,
         config=CrawlerRunConfig(
             cache_mode=CacheMode.BYPASS,  # Do not use cached data
             extraction_strategy=llm_strategy,  # Strategy for data extraction
@@ -136,14 +125,14 @@ async def fetch_and_process_page(
     )
 
     if not (result.success and result.extracted_content):
-        print(f"Error fetching page {page_number}: {result.error_message}")
-        return [], False
+        print(f"Error fetching URL: {result.error_message}")
+        return []
 
     # Parse extracted content
     extracted_data = json.loads(result.extracted_content)
     if not extracted_data:
-        print(f"No venues found on page {page_number}.")
-        return [], False
+        print("No venues found.")
+        return []
 
     # After parsing extracted content
     print("Extracted data:", extracted_data)
@@ -170,8 +159,8 @@ async def fetch_and_process_page(
         complete_venues.append(venue)
 
     if not complete_venues:
-        print(f"No complete venues found on page {page_number}.")
-        return [], False
+        print("No complete venues found.")
+        return []
 
-    print(f"Extracted {len(complete_venues)} venues from page {page_number}.")
-    return complete_venues, False  # Continue crawling
+    print(f"Extracted {len(complete_venues)} venues.")
+    return complete_venues

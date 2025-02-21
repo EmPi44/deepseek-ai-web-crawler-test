@@ -37,7 +37,6 @@ async def crawl_venues():
             # Fetch and process data from the current page
             venues, no_results_found = await fetch_and_process_page(
                 crawler,
-                page_number,
                 BASE_URL,
                 CSS_SELECTOR,
                 llm_strategy,
