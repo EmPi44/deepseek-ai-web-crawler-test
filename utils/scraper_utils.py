@@ -95,7 +95,7 @@ async def fetch_and_process_page(
     session_id: str,
     required_keys: List[str],
     seen_names: Set[str],
-) -> List[dict]:
+) -> Tuple[List[dict], bool]:
     """
     Fetches and processes venue data from a single URL.
 
@@ -109,7 +109,7 @@ async def fetch_and_process_page(
         seen_names (Set[str]): Set of venue names that have already been seen.
 
     Returns:
-        List[dict]: A list of processed venues from the URL.
+        Tuple[List[dict], bool]: A tuple containing a list of processed venues and a boolean indicating whether "No Results Found" was encountered.
     """
     print(f"Loading URL: {base_url}")
 
@@ -126,13 +126,13 @@ async def fetch_and_process_page(
 
     if not (result.success and result.extracted_content):
         print(f"Error fetching URL: {result.error_message}")
-        return []
+        return [], False
 
     # Parse extracted content
     extracted_data = json.loads(result.extracted_content)
     if not extracted_data:
         print("No venues found.")
-        return []
+        return [], False
 
     # After parsing extracted content
     print("Extracted data:", extracted_data)
@@ -150,17 +150,20 @@ async def fetch_and_process_page(
         if not is_complete_venue(venue, required_keys):
             continue  # Skip incomplete venues
 
-        if is_duplicate_venue(venue["name"], seen_names):
-            print(f"Duplicate venue '{venue['name']}' found. Skipping.")
+        if is_duplicate_venue(venue["document_name"], seen_names):
+            print(f"Duplicate venue '{venue['document_name']}' found. Skipping.")
             continue  # Skip duplicate venues
 
         # Add venue to the list
-        seen_names.add(venue["name"])
+        seen_names.add(venue["document_name"])
         complete_venues.append(venue)
 
     if not complete_venues:
         print("No complete venues found.")
-        return []
+        return [], False
 
+    # Check for "No Results Found" message
+    no_results_found = await check_no_results(crawler, base_url, session_id)
+    
     print(f"Extracted {len(complete_venues)} venues.")
-    return complete_venues
+    return complete_venues, no_results_found
