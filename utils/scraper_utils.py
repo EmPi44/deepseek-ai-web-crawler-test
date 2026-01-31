@@ -7,6 +7,7 @@ from crawl4ai import (
     BrowserConfig,
     CacheMode,
     CrawlerRunConfig,
+    JsonCssExtractionStrategy,
     LLMExtractionStrategy,
 )
 
@@ -202,3 +203,123 @@ async def fetch_and_process_page(
 
     print(f"Extracted {len(complete_venues)} venues.")
     return complete_venues, False
+
+
+async def find_certification_pages(
+    crawler: AsyncWebCrawler,
+    start_url: str,
+    session_id: str,
+) -> List[str]:
+    """
+    Uses a combination of CSS and LLM to efficiently find certification pages.
+    """
+    print(f"Searching for certification pages starting from: {start_url}")
+    
+    # First, use CSS to extract all links efficiently
+    link_schema = {
+        "name": "Links",
+        "baseSelector": "a",
+        "fields": [
+            {
+                "name": "url",
+                "type": "attribute",
+                "attribute": "href"
+            },
+            {
+                "name": "text",
+                "type": "text"
+            }
+        ]
+    }
+
+    # Get all links first using CSS (fast and token-free)
+    initial_result = await crawler.arun(
+        url=start_url,
+        config=CrawlerRunConfig(
+            cache_mode=CacheMode.BYPASS,
+            extraction_strategy=JsonCssExtractionStrategy(link_schema),
+            session_id=session_id,
+        ),
+    )
+
+    if not initial_result.success:
+        print(f"Error fetching main page: {initial_result.error_message}")
+        return []
+
+    # Then use LLM to analyze the collected links
+    certification_finder_strategy = LLMExtractionStrategy(
+        provider="groq/deepseek-r1-distill-llama-70b",
+        api_token=os.getenv("GROQ_API_KEY"),
+        schema={
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "url": {"type": "string"},
+                    "reason": {"type": "string"}
+                },
+                "required": ["url", "reason"]
+            }
+        },
+        extraction_type="schema",
+        instruction="""
+            From the following list of URLs and their text content, identify which ones are likely to lead to 
+            certification pages (ISO certificates, quality management certificates, etc.).
+            
+            Look for indicators like:
+            - certificates, certifications, certification
+            - zertifikate, zertifizierungen (German)
+            - quality management, qualitätsmanagement
+            - ISO, DIN, standards
+            - downloads (if in context of certificates)
+            
+            Return only the most relevant links that are likely to contain certificates.
+            
+            For each relevant link found, provide:
+            1. The URL
+            2. A reason why you think this link leads to certificates
+        """,
+        input_format="markdown",
+        verbose=True,
+    )
+
+    # Use LLM to analyze the pre-collected links
+    result = await crawler.arun(
+        url=start_url,
+        config=CrawlerRunConfig(
+            cache_mode=CacheMode.BYPASS,
+            extraction_strategy=certification_finder_strategy,
+            content=initial_result.extracted_content,  # Pass pre-collected links
+            session_id=session_id,
+        ),
+    )
+
+    if not result.success or not result.extracted_content:
+        print(f"Error analyzing links: {result.error_message}")
+        return []
+
+    # Process the LLM results
+    try:
+        found_pages = json.loads(result.extracted_content)
+        
+        # Get base URL for resolving relative URLs
+        parsed_url = urlparse(start_url)
+        base_url = f"{parsed_url.scheme}://{parsed_url.netloc}"
+        
+        # Convert relative URLs to absolute URLs
+        certification_pages = []
+        seen_urls = set()
+        
+        for page in found_pages:
+            full_url = urljoin(base_url, page['url'])
+            if full_url not in seen_urls:
+                certification_pages.append(full_url)
+                seen_urls.add(full_url)
+                print(f"Found certification page: {full_url}")
+                print(f"Reason: {page['reason']}")
+
+        return certification_pages
+
+    except json.JSONDecodeError as e:
+        print(f"Error parsing LLM response: {e}")
+        return []
